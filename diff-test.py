@@ -44,6 +44,10 @@ def parse_args ():
                         help = "Git repo to compare")
     parser.add_argument("-p", "--pkg",
                         help = "Source package to compare")
+    parser.add_argument("--after", type=str,
+                        help = "Consider only commits after date (eg: 2016-01-31)")
+    parser.add_argument("--before", type=str,
+                        help = "Consider only commits before date (eg: 2016-01-31)")
     parser.add_argument("-l", "--logging", type=str, choices=["info", "debug"],
                         help = "Logging level for output")
     args = parser.parse_args()
@@ -168,13 +172,21 @@ if __name__ == "__main__":
         else:
             command_out = None
 
-    git_class = perceval.backends.git.Git
-    git_parser = git_class("git.log")
-    print ("Commit", "total_files", "total_lines",
+    git_cmd = ["git", "-C", args.repo, "log", "--raw", "--numstat",
+                "--pretty=fuller", "--decorate=full", "--parents",
+                "-M", "-C", "-c", "--first-parent", "master"]
+    if args.after:
+        git_cmd.extend(["--after", args.after])
+    if args.before:
+        git_cmd.extend(["--before", args.before])
+    git_proc = subprocess.Popen(git_cmd, stdout = subprocess.PIPE,
+                                universal_newlines=True)
+    git_parser = perceval.backends.git.GitParser(git_proc.stdout)
+    print ("Commit", "date", "total_files", "total_lines",
         "left_files", "right_files", "diff_files",
         "left_lines", "right_lines", "added_lines", "removed_lines", sep=",")
-    for item in git_parser.fetch():
-        print(item["commit"], end=",", flush=True)
+    for item in git_parser.parse():
+        print(item["commit"], item["CommitDate"], sep=",", end=",", flush=True)
         subprocess.call(["git", "-C", args.repo, "checkout", item["commit"]],
                         stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
         dcmp = filecmp.dircmp(args.repo, args.pkg)
