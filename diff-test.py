@@ -66,7 +66,8 @@ def count_unique(dir, files):
     for file in files:
         name = os.path.join(dir, file)
         if os.path.isfile(name):
-            num_lines += sum(1 for line in open(name))
+            num_lines += sum(1 for line in open(name, encoding="ascii",
+                                                errors="surrogateescape"))
             logging.debug("Unique file: %s (lines: %d)" % (name, num_lines))
     logging.debug ("Unique files in dir %s: files: %d, lines: %d"
         % (dir, num_files, num_lines))
@@ -123,32 +124,36 @@ def count_common(dir_left, dir_right, files):
     return (diff_files, added, removed)
 
 def compare_dirs(dcmp):
-    """Comparte two directories given their filecmp.dircmp object.
+    """Compare two directories given their filecmp.dircmp object.
+
+    Produces as a result a dictionary with metrcis about the comparison:
+     * left_files: number of files unique in left directory
+     * right_files: number of files unique in right directory
+     * diff_files: number of files present in both directories, but different
+     * left_lines: number of lines for files unique in left directory
+     * right_lines: number of lines for files unique in left directory
+     * added_lines: number of lines added in files present in both directories
+     * removed_lines: number of lines removed in files present in both directories
+
+    added_lines, removed_lines refer only to files counted as diff_files
 
     :params dcmp: filecmp.dircmp object for directories to compare
     :returns: dictionary with differences
 
     """
 
-    (left_files, left_lines) = count_unique(dir = dcmp.left,
-                                            files = dcmp.left_only)
-    (right_files, right_lines) = count_unique(dir = dcmp.right,
-                                            files = dcmp.right_only)
-    (diff_files, added_lines, removed_lines) \
+    m = {}
+    (m["left_files"], m["left_lines"]) \
+        = count_unique(dir = dcmp.left, files = dcmp.left_only)
+    (m["right_files"], m["right_lines"]) \
+        = count_unique(dir = dcmp.right, files = dcmp.right_only)
+    (m["diff_files"], m["added_lines"], m["removed_lines"]) \
         = count_common(dcmp.left, dcmp.right, dcmp.common_files)
     for sub_dcmp in dcmp.subdirs.values():
-        (left_f, left_l, right_f, right_l, diff_f, added_l, removed_l) \
-            = compare_dirs(sub_dcmp)
-        left_files += left_f
-        left_lines += left_l
-        right_files += right_f
-        right_lines += right_l
-        diff_files += diff_f
-        added_lines += added_l
-        removed_lines += removed_l
-    return (left_files, left_lines, right_files, right_lines,
-        diff_files, added_lines, removed_lines)
-
+        m_subdir = compare_dirs(sub_dcmp)
+        for metric, value in m_subdir.items():
+            m[metric] += value
+    return m
 
 if __name__ == "__main__":
     args = parse_args()
@@ -156,19 +161,29 @@ if __name__ == "__main__":
         log_format = '%(levelname)s:%(message)s'
         if args.logging == "info":
             logging.basicConfig(format=log_format, level=logging.INFO)
+            command_out = None
         elif args.logging == "debug":
             logging.basicConfig(format=log_format, level=logging.DEBUG)
-    dcmp = filecmp.dircmp(args.repo, args.pkg)
-    (left_files, right_files, diff_files,
-        left_lines, right_lines, added_lines, removed_lines) \
-        = compare_dirs(dcmp)
-    print ("Files: %d, %d, %d, lines: %d, %d, %d, %d)"
-        % (left_files, right_files, diff_files,
-            left_lines, right_lines, added_lines, removed_lines))
-    exit()
+            command_out = subprocess.DEVNULL
+        else:
+            command_out = None
+
     git_class = perceval.backends.git.Git
     git_parser = git_class("git.log")
+    print ("Commit", "total_files", "total_lines",
+        "left_files", "right_files", "diff_files",
+        "left_lines", "right_lines", "added_lines", "removed_lines", sep=",")
     for item in git_parser.fetch():
-        print(item["commit"])
-        print()
-    exit()
+        print(item["commit"], end=",", flush=True)
+        subprocess.call(["git", "-C", args.repo, "checkout", item["commit"]],
+                        stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
+        dcmp = filecmp.dircmp(args.repo, args.pkg)
+        m = compare_dirs(dcmp)
+        logging.debug ("Commit %s. Files: %d, %d, %d, lines: %d, %d, %d, %d)"
+            % (item["commit"], m["left_files"], m["right_files"], m["diff_files"],
+            m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"]))
+        print(m["left_files"] + m["right_files"] + m["diff_files"],
+            m["left_lines"] + m["right_lines"] + m["added_lines"] + m["removed_lines"],
+            m["left_files"], m["right_files"], m["diff_files"],
+            m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"],
+            sep=",")
