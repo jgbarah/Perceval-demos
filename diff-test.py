@@ -50,6 +50,8 @@ def parse_args ():
                         help = "Consider only commits before date (eg: 2016-01-31)")
     parser.add_argument("-l", "--logging", type=str, choices=["info", "debug"],
                         help = "Logging level for output")
+    parser.add_argument("--step", type=int, default=1,
+                        help = "Step (compare every step commits, instead of all)")
     args = parser.parse_args()
     return args
 
@@ -159,6 +161,32 @@ def compare_dirs(dcmp):
             m[metric] += value
     return m
 
+def compute_metrics(commits, commit_no):
+    """Compute metrics for commmit number (ordered as from git log).
+
+    Checks out the corresponding commit in the git repository, and
+    compute the metrics for its difference with the given package.
+    The returned metrics are those produced by compare_dirs plus:
+     * commit: hash for the commit
+     * date: commit date for the commit (as a string)
+
+    :params commits: list of all commits
+    :params commmit_no: commit number (starting in 0)
+    :returns: dictionary with metrics
+    """
+
+    commit = commits[commit_no]
+    subprocess.call(["git", "-C", args.repo, "checkout", commit[0]],
+                    stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
+    dcmp = filecmp.dircmp(args.repo, args.pkg)
+    m = compare_dirs(dcmp)
+    logging.debug ("Commit %s. Files: %d, %d, %d, lines: %d, %d, %d, %d)"
+        % (commit[0], m["left_files"], m["right_files"], m["diff_files"],
+        m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"]))
+    m["commit"] = commit[0]
+    m["date"] = commit[1]
+    return m
+
 if __name__ == "__main__":
     args = parse_args()
     if args.logging:
@@ -182,20 +210,21 @@ if __name__ == "__main__":
     git_proc = subprocess.Popen(git_cmd, stdout = subprocess.PIPE,
                                 universal_newlines=True)
     git_parser = perceval.backends.git.GitParser(git_proc.stdout)
-    print ("Commit", "date", "total_files", "total_lines",
-        "left_files", "right_files", "diff_files",
-        "left_lines", "right_lines", "added_lines", "removed_lines", sep=",")
+    logging.info("Parsing git log output...")
+    logging.debug("git command: %s.", " ".join(git_cmd))
+    commits = []
     for item in git_parser.parse():
-        print(item["commit"], item["CommitDate"], sep=",", end=",", flush=True)
-        subprocess.call(["git", "-C", args.repo, "checkout", item["commit"]],
-                        stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
-        dcmp = filecmp.dircmp(args.repo, args.pkg)
-        m = compare_dirs(dcmp)
-        logging.debug ("Commit %s. Files: %d, %d, %d, lines: %d, %d, %d, %d)"
-            % (item["commit"], m["left_files"], m["right_files"], m["diff_files"],
-            m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"]))
-        print(m["left_files"] + m["right_files"] + m["diff_files"],
+        commits.append([item["commit"], item["CommitDate"]])
+    logging.info("%d commits parsed." % len(commits))
+    print ("commit", "date", "total_files", "total_lines",
+        "left_files", "right_files", "diff_files",
+        "left_lines", "right_lines", "added_lines", "removed_lines",
+        sep=",", flush=True)
+    for seq_no in range(0, len(commits), args.step):
+        m = compute_metrics(commits, seq_no)
+        print(m["commit"], m["date"],
+            m["left_files"] + m["right_files"] + m["diff_files"],
             m["left_lines"] + m["right_lines"] + m["added_lines"] + m["removed_lines"],
             m["left_files"], m["right_files"], m["diff_files"],
             m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"],
-            sep=",")
+            sep=",", flush=True)
