@@ -30,6 +30,9 @@ import argparse
 import filecmp
 import difflib
 import os
+import perceval.backends
+import subprocess
+import logging
 
 def parse_args ():
     """
@@ -37,10 +40,12 @@ def parse_args ():
 
     """
     parser = argparse.ArgumentParser(description = description)
-    parser.add_argument("--repo",
+    parser.add_argument("-r", "--repo",
                         help = "Git repo to compare")
-    parser.add_argument("--pkg",
+    parser.add_argument("-p", "--pkg",
                         help = "Source package to compare")
+    parser.add_argument("-l", "--logging", type=str, choices=["info", "debug"],
+                        help = "Logging level for output")
     args = parser.parse_args()
     return args
 
@@ -62,8 +67,8 @@ def count_unique(dir, files):
         name = os.path.join(dir, file)
         if os.path.isfile(name):
             num_lines += sum(1 for line in open(name))
-            print ("Unique file: %s (lines: %d)" % (name, num_lines))
-    print ("Unique files in dir %s: files: %d, lines: %d"
+            logging.debug("Unique file: %s (lines: %d)" % (name, num_lines))
+    logging.debug ("Unique files in dir %s: files: %d, lines: %d"
         % (dir, num_files, num_lines))
     return (num_files, num_lines)
 
@@ -117,7 +122,14 @@ def count_common(dir_left, dir_right, files):
         removed += removed_l
     return (diff_files, added, removed)
 
-def count_files(dcmp):
+def compare_dirs(dcmp):
+    """Comparte two directories given their filecmp.dircmp object.
+
+    :params dcmp: filecmp.dircmp object for directories to compare
+    :returns: dictionary with differences
+
+    """
+
     (left_files, left_lines) = count_unique(dir = dcmp.left,
                                             files = dcmp.left_only)
     (right_files, right_lines) = count_unique(dir = dcmp.right,
@@ -126,7 +138,7 @@ def count_files(dcmp):
         = count_common(dcmp.left, dcmp.right, dcmp.common_files)
     for sub_dcmp in dcmp.subdirs.values():
         (left_f, left_l, right_f, right_l, diff_f, added_l, removed_l) \
-            = count_files(sub_dcmp)
+            = compare_dirs(sub_dcmp)
         left_files += left_f
         left_lines += left_l
         right_files += right_f
@@ -137,12 +149,26 @@ def count_files(dcmp):
     return (left_files, left_lines, right_files, right_lines,
         diff_files, added_lines, removed_lines)
 
+
 if __name__ == "__main__":
     args = parse_args()
+    if args.logging:
+        log_format = '%(levelname)s:%(message)s'
+        if args.logging == "info":
+            logging.basicConfig(format=log_format, level=logging.INFO)
+        elif args.logging == "debug":
+            logging.basicConfig(format=log_format, level=logging.DEBUG)
     dcmp = filecmp.dircmp(args.repo, args.pkg)
-    (left_files, left_lines, right_files, right_lines,
-        diff_files, added_lines, removed_lines) = count_files(dcmp)
+    (left_files, right_files, diff_files,
+        left_lines, right_lines, added_lines, removed_lines) \
+        = compare_dirs(dcmp)
     print ("Files: %d, %d, %d, lines: %d, %d, %d, %d)"
         % (left_files, right_files, diff_files,
             left_lines, right_lines, added_lines, removed_lines))
+    exit()
+    git_class = perceval.backends.git.Git
+    git_parser = git_class("git.log")
+    for item in git_parser.fetch():
+        print(item["commit"])
+        print()
     exit()
