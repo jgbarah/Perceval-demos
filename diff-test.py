@@ -162,31 +162,89 @@ def compare_dirs(dcmp):
             m[metric] += value
     return m
 
-def compute_metrics(commits, commit_no):
-    """Compute metrics for commmit number (ordered as from git log).
 
-    Checks out the corresponding commit in the git repository, and
-    compute the metrics for its difference with the given package.
-    The returned metrics are those produced by compare_dirs plus:
-     * commit: hash for the commit
-     * date: commit date for the commit (as a string)
+class Metrics:
+    """Data structure for dealing with metrics related to commits.
 
-    :params commits: list of all commits
-    :params commmit_no: commit number (starting in 0)
-    :returns: dictionary with metrics
     """
 
-    commit = commits[commit_no]
-    subprocess.call(["git", "-C", args.repo, "checkout", commit[0]],
-                    stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
-    dcmp = filecmp.dircmp(args.repo, args.pkg)
-    m = compare_dirs(dcmp)
-    logging.debug ("Commit %s. Files: %d, %d, %d, lines: %d, %d, %d, %d)"
-        % (commit[0], m["left_files"], m["right_files"], m["diff_files"],
-        m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"]))
-    m["commit"] = commit[0]
-    m["date"] = commit[1]
-    return m
+    def __init__(self):
+
+        # List of commit hashes, ordered as returned by git
+        self.commits = []
+        # Dictionary with metrics, key is the commit number (order in commits)
+        self.metrics = {}
+
+    def add_commit(self, commit, date):
+        """Add commit info to data structure.
+
+        :params commit: hash of the commit
+        :params date: commit date
+
+        """
+
+        self.commits.append([commit, date])
+
+    def num_commits(self):
+        """Return the number of commits stored.
+
+        """
+
+        return len(self.commits)
+
+    def compute_metrics(self, commit_no):
+        """Compute metrics for commmit number (ordered as from git log).
+
+        Checks out the corresponding commit in the git repository, and
+        compute the metrics for its difference with the given package.
+        The returned metrics are those produced by compare_dirs plus:
+         * commit: hash for the commit
+         * date: commit date for the commit (as a string)
+
+        :params commits: list of all commits
+        :params commmit_no: commit number (starting in 0)
+        :returns: dictionary with metrics
+        """
+
+        commit = self.commits[commit_no]
+        subprocess.call(["git", "-C", args.repo, "checkout", commit[0]],
+                        stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
+        dcmp = filecmp.dircmp(args.repo, args.pkg)
+        m = compare_dirs(dcmp)
+        logging.debug ("Commit %s. Files: %d, %d, %d, lines: %d, %d, %d, %d)"
+            % (commit[0], m["left_files"], m["right_files"], m["diff_files"],
+            m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"]))
+        m["commit"] = commit[0]
+        m["date"] = commit[1]
+        return m
+
+    def compute_range (self, first, last, step):
+        """Compute metrics for a range of commits.
+
+        Compute metrics for a range of commits, but only for those in the
+        appropriate step.
+
+        :params first: first commit to consider
+        :params last: last commit to consider
+        :params step: only consider commits coincident with step
+        :returns: dictionary with (updated) metrics
+
+        """
+
+        for seq_no in range(first, last, step):
+            logging.info("Computing metrics for %d." % seq_no)
+            if seq_no not in self.metrics:
+                m = self.compute_metrics(seq_no)
+                logging.info(m)
+                self.metrics[seq_no] = m
+
+                                
+    def metrics_items (self):
+        """Iterator returning metrics for all computed commits.
+
+        """
+
+        return self.metrics.values()
 
 if __name__ == "__main__":
     args = parse_args()
@@ -210,7 +268,7 @@ if __name__ == "__main__":
         git_cmd.extend(["--before", args.before])
 
     logging.info("git command: %s.", " ".join(git_cmd))
-    commits = []
+    metrics = Metrics()
     with subprocess.Popen(git_cmd, stdout = subprocess.PIPE) as git_proc:
         # TextIOWrapper is needed to specify an error handler that ignores
         #  non-utf8 characters
@@ -219,14 +277,14 @@ if __name__ == "__main__":
         logging.info("Parsing git log output...")
         logging.debug("git command: %s.", " ".join(git_cmd))
         for item in git_parser.parse():
-            commits.append([item["commit"], item["CommitDate"]])
-    logging.info("%d commits parsed." % len(commits))
+            metrics.add_commit(item["commit"], item["CommitDate"])
+    logging.info("%d commits parsed." % metrics.num_commits())
     print ("commit", "date", "total_files", "total_lines",
         "left_files", "right_files", "diff_files",
         "left_lines", "right_lines", "added_lines", "removed_lines",
         sep=",", flush=True)
-    for seq_no in range(0, len(commits), args.step):
-        m = compute_metrics(commits, seq_no)
+    metrics.compute_range (0, metrics.num_commits(), args.step)
+    for m in metrics.metrics_items():
         print(m["commit"], m["date"],
             m["left_files"] + m["right_files"] + m["diff_files"],
             m["left_lines"] + m["right_lines"] + m["added_lines"] + m["removed_lines"],
