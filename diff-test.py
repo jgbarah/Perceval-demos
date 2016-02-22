@@ -33,6 +33,7 @@ import os
 import perceval.backends
 import subprocess
 import logging
+import io
 
 def parse_args ():
     """
@@ -207,14 +208,18 @@ if __name__ == "__main__":
         git_cmd.extend(["--after", args.after])
     if args.before:
         git_cmd.extend(["--before", args.before])
-    git_proc = subprocess.Popen(git_cmd, stdout = subprocess.PIPE,
-                                universal_newlines=True)
-    git_parser = perceval.backends.git.GitParser(git_proc.stdout)
-    logging.info("Parsing git log output...")
-    logging.debug("git command: %s.", " ".join(git_cmd))
+
+    logging.info("git command: %s.", " ".join(git_cmd))
     commits = []
-    for item in git_parser.parse():
-        commits.append([item["commit"], item["CommitDate"]])
+    with subprocess.Popen(git_cmd, stdout = subprocess.PIPE) as git_proc:
+        # TextIOWrapper is needed to specify an error handler that ignores
+        #  non-utf8 characters
+        git_proc_stdout = io.TextIOWrapper(git_proc.stdout,errors="ignore")
+        git_parser = perceval.backends.git.GitParser(git_proc_stdout)
+        logging.info("Parsing git log output...")
+        logging.debug("git command: %s.", " ".join(git_cmd))
+        for item in git_parser.parse():
+            commits.append([item["commit"], item["CommitDate"]])
     logging.info("%d commits parsed." % len(commits))
     print ("commit", "date", "total_files", "total_lines",
         "left_files", "right_files", "diff_files",
