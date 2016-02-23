@@ -218,6 +218,7 @@ class Metrics:
         m["total_files"] = m["left_files"] + m["right_files"] + m["diff_files"]
         m["total_lines"] = m["left_lines"] + m["right_lines"] \
             + m["added_lines"] + m["removed_lines"]
+        m["commit_seq"] = commit_no
         m["commit"] = commit[0]
         m["date"] = commit[1]
         return m
@@ -235,7 +236,7 @@ class Metrics:
 
         """
 
-        for seq_no in range(first, last, step):
+        for seq_no in list(range(first, last, step)) + [last]:
             logging.info("Computing metrics for %d." % seq_no)
             if seq_no not in self.metrics:
                 m = self.compute_metrics(seq_no)
@@ -257,7 +258,7 @@ class Metrics:
 
         values = []
         indexes = []
-        for seq_no in self.metrics:
+        for seq_no in sorted(self.metrics):
             value = self.metrics[seq_no][metric]
             if len(values) <= length:
                 # Still room, just add to lists
@@ -269,11 +270,13 @@ class Metrics:
                 if value < largest:
                     # Largest is larger. Remove it from lists
                     largest_index = values.index(largest)
-                    values.remove(largest)
+                    values.pop(largest_index)
                     indexes.pop(largest_index)
                     # And now add value to the right
                     values.append(value)
-                    values.append(seq_no)
+                    indexes.append(seq_no)
+            logging.info("values: " + str(values))
+            logging.info("indexes " + str(indexes))
         return (indexes[0], indexes[-1])
 
     def metrics_items (self):
@@ -281,7 +284,8 @@ class Metrics:
 
         """
 
-        return self.metrics.values()
+        return [self.metrics[seq_no] for seq_no in sorted(self.metrics)]
+        #return self.metrics.values()
 
 if __name__ == "__main__":
     args = parse_args()
@@ -316,15 +320,21 @@ if __name__ == "__main__":
         for item in git_parser.parse():
             metrics.add_commit(item["commit"], item["CommitDate"])
     logging.info("%d commits parsed." % metrics.num_commits())
-    print ("commit", "date", "total_files", "total_lines",
+    print ("commit_seq", "commit", "date", "total_files", "total_lines",
         "left_files", "right_files", "diff_files",
         "left_lines", "right_lines", "added_lines", "removed_lines",
         sep=",", flush=True)
-    metrics.compute_range (0, metrics.num_commits(), args.step)
+    left = 0
+    right = metrics.num_commits()-1
+    step = args.step
+    while step >= 1:
+        metrics.compute_range (left, right, step)
+        (left, right) = metrics.min_range(3, "total_lines")
+        logging.info("Step: %d, left: %d, right: %d." % (step, left, right))
+        step = step // 2
     for m in metrics.metrics_items():
-        print(m["commit"], m["date"],
+        print(m["commit_seq"], m["commit"], m["date"],
             m["total_files"], m["total_lines"],
             m["left_files"], m["right_files"], m["diff_files"],
             m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"],
             sep=",", flush=True)
-    logging.info(metrics.min_range(2, "total_lines"))
