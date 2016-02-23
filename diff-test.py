@@ -213,7 +213,11 @@ class Metrics:
         m = compare_dirs(dcmp)
         logging.debug ("Commit %s. Files: %d, %d, %d, lines: %d, %d, %d, %d)"
             % (commit[0], m["left_files"], m["right_files"], m["diff_files"],
-            m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"]))
+            m["left_lines"], m["right_lines"],
+            m["added_lines"], m["removed_lines"]))
+        m["total_files"] = m["left_files"] + m["right_files"] + m["diff_files"]
+        m["total_lines"] = m["left_lines"] + m["right_lines"] \
+            + m["added_lines"] + m["removed_lines"]
         m["commit"] = commit[0]
         m["date"] = commit[1]
         return m
@@ -238,7 +242,40 @@ class Metrics:
                 logging.info(m)
                 self.metrics[seq_no] = m
 
-                                
+    def min_range (self, length, metric):
+        """Find range of minimum values.
+
+        Returns a range of minimum values. The range will have at least
+        length values. In fact, a tuple with the lowest count, and
+        the maximum count for the range.
+
+        :params length: length (number of values) of the range
+        :params metric: name of the metric to consider for comparison
+        :returns: tuple (min, max)
+
+        """
+
+        values = []
+        indexes = []
+        for seq_no in self.metrics:
+            value = self.metrics[seq_no][metric]
+            if len(values) <= length:
+                # Still room, just add to lists
+                values.append(value)
+                indexes.append(seq_no)
+            else:
+                # Only worry if largest in lists is larger than value
+                largest = max(values)
+                if value < largest:
+                    # Largest is larger. Remove it from lists
+                    largest_index = values.index(largest)
+                    values.remove(largest)
+                    indexes.pop(largest_index)
+                    # And now add value to the right
+                    values.append(value)
+                    values.append(seq_no)
+        return (indexes[0], indexes[-1])
+
     def metrics_items (self):
         """Iterator returning metrics for all computed commits.
 
@@ -286,8 +323,8 @@ if __name__ == "__main__":
     metrics.compute_range (0, metrics.num_commits(), args.step)
     for m in metrics.metrics_items():
         print(m["commit"], m["date"],
-            m["left_files"] + m["right_files"] + m["diff_files"],
-            m["left_lines"] + m["right_lines"] + m["added_lines"] + m["removed_lines"],
+            m["total_files"], m["total_lines"],
             m["left_files"], m["right_files"], m["diff_files"],
             m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"],
             sep=",", flush=True)
+    logging.info(metrics.min_range(2, "total_lines"))
