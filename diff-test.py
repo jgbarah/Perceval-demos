@@ -51,6 +51,8 @@ def parse_args ():
                         help = "Consider only commits before date (eg: 2016-01-31)")
     parser.add_argument("-l", "--logging", type=str, choices=["info", "debug"],
                         help = "Logging level for output")
+    parser.add_argument("--logfile", type=str,
+                        help = "Log file")
     parser.add_argument("--step", type=int, default=1,
                         help = "Step (compare every step commits, instead of all)")
     args = parser.parse_args()
@@ -185,6 +187,13 @@ class Metrics:
 
         self.commits.append([commit, date])
 
+    def get_commit(self, seq_no):
+        """Get a commit tuple (hash, date) for a given commit sequence.
+
+        """
+
+        return self.commits[seq_no]
+
     def num_commits(self):
         """Return the number of commits stored.
 
@@ -247,12 +256,13 @@ class Metrics:
         """Find range of minimum values.
 
         Returns a range of minimum values. The range will have at least
-        length values. In fact, a tuple with the lowest count, and
-        the maximum count for the range.
+        length values. In fact, a tuple with the lowest sequence number, and
+        the maximum sequence number for the range, the sequence number for
+        the minimum value, and the minimum value.
 
         :params length: length (number of values) of the range
         :params metric: name of the metric to consider for comparison
-        :returns: tuple (min, max)
+        :returns: tuple (min, max, min_index, min_value)
 
         """
 
@@ -277,7 +287,9 @@ class Metrics:
                     indexes.append(seq_no)
             logging.info("values: " + str(values))
             logging.info("indexes " + str(indexes))
-        return (indexes[0], indexes[-1])
+        min_value = min(values)
+        min_index = indexes[values.index(min_value)]
+        return (indexes[0], indexes[-1], min_index, min_value)
 
     def metrics_items (self):
         """Iterator returning metrics for all computed commits.
@@ -292,13 +304,14 @@ if __name__ == "__main__":
     if args.logging:
         log_format = '%(levelname)s:%(message)s'
         if args.logging == "info":
-            logging.basicConfig(format=log_format, level=logging.INFO)
-            command_out = None
+            level = logging.INFO
         elif args.logging == "debug":
-            logging.basicConfig(format=log_format, level=logging.DEBUG)
-            command_out = subprocess.DEVNULL
+            level = logging.DEBUG
+        if args.logfile:
+            logging.basicConfig(format=log_format, level=level,
+                                filename = args.logfile, filemode = "w")
         else:
-            command_out = None
+            logging.basicConfig(format=log_format, level=level)
 
     git_cmd = ["git", "-C", args.repo, "log", "--raw", "--numstat",
                 "--pretty=fuller", "--decorate=full", "--parents",
@@ -320,18 +333,22 @@ if __name__ == "__main__":
         for item in git_parser.parse():
             metrics.add_commit(item["commit"], item["CommitDate"])
     logging.info("%d commits parsed." % metrics.num_commits())
-    print ("commit_seq", "commit", "date", "total_files", "total_lines",
-        "left_files", "right_files", "diff_files",
-        "left_lines", "right_lines", "added_lines", "removed_lines",
-        sep=",", flush=True)
     left = 0
     right = metrics.num_commits()-1
     step = args.step
     while step >= 1:
         metrics.compute_range (left, right, step)
-        (left, right) = metrics.min_range(3, "total_lines")
-        logging.info("Step: %d, left: %d, right: %d." % (step, left, right))
+        (left, right, min_seq, min_value) = metrics.min_range(3, "total_lines")
+        logging.info("Step: %d, left: %d, right: %d, min. seq: %d, min. value: %d."
+                    % (step, left, right, min_seq, min_value))
         step = step // 2
+    min_commit = metrics.get_commit(min_seq)
+    print ("Most similar checkout: %d (diff: %d), date: %s, hash: %s." %
+            (min_seq, min_value, min_commit[0], min_commit[1]))
+    print ("commit_seq", "commit", "date", "total_files", "total_lines",
+        "left_files", "right_files", "diff_files",
+        "left_lines", "right_lines", "added_lines", "removed_lines",
+        sep=",", flush=True)
     for m in metrics.metrics_items():
         print(m["commit_seq"], m["commit"], m["date"],
             m["total_files"], m["total_lines"],
