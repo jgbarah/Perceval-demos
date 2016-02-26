@@ -268,7 +268,8 @@ class Metrics:
 
         values = []
         indexes = []
-        for seq_no in sorted(self.metrics):
+        seq_commits = sorted(self.metrics)
+        for seq_no in seq_commits:
             value = self.metrics[seq_no][metric]
             if len(values) <= length:
                 # Still room, just add to lists
@@ -289,6 +290,18 @@ class Metrics:
             logging.info("indexes " + str(indexes))
         min_value = min(values)
         min_index = indexes[values.index(min_value)]
+        # Add next computed checkout on the left and on the right, just in case we're
+        # on the edge of the checkouts we have computed
+        if indexes[0] > seq_commits[0]:
+            left_seq = seq_commits[seq_commits.index(indexes[0])-1]
+            indexes.insert(0, left_seq)
+            values.insert(0, self.metrics[left_seq][metric])
+        if indexes[-1] < seq_commits[-1]:
+            right_seq = seq_commits[seq_commits.index(indexes[-1])+1]
+            indexes.append(right_seq)
+            values.append(self.metrics[right_seq][metric])
+        logging.info("values: " + str(values))
+        logging.info("indexes " + str(indexes))
         return (indexes[0], indexes[-1], min_index, min_value)
 
     def metrics_items (self):
@@ -344,7 +357,7 @@ if __name__ == "__main__":
         step = step // 2
     min_commit = metrics.get_commit(min_seq)
     print ("Most similar checkout: %d (diff: %d), date: %s, hash: %s." %
-            (min_seq, min_value, min_commit[0], min_commit[1]))
+            (min_seq, min_value, min_commit[1], min_commit[0]))
     print ("commit_seq", "commit", "date", "total_files", "total_lines",
         "left_files", "right_files", "diff_files",
         "left_lines", "right_lines", "added_lines", "removed_lines",
