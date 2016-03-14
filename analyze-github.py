@@ -32,13 +32,12 @@ analyze-github.py --repo MetricsGrimoire/Bicho
 
 import argparse
 import perceval.backends
-#import subprocess
 import logging
 import tempfile
 import os
-#import io
 import elasticsearch
 from datetime import datetime, timezone
+import email.utils
 
 def parse_args ():
     """
@@ -67,7 +66,72 @@ mapping_commit = {
     }
 }
 
-class Metadata(object):
+class Chains (object):
+    """Chains (directed graph) of enrichers.
+
+    """
+
+    def __init__ (self):
+
+        # All data structures are based on nodes, which are integers,
+        # starting at 0 (next node is the next integer to use as node id)
+        self.last_node = 0
+        # Dictorionary for graph, each key is a node holding as data the
+        # list of nodes that follow it.
+        self.graph = {}
+        # Dictionary for nodes, each key is a node holding as data the object
+        # for that node
+        self.nodes = {}
+        # List of starting nodes
+        self.start = []
+
+    def attach (self, object, point = None):
+        """Attach a new object to the graph, returns attach point for next).
+
+        If point is None (or no point), attach at the beginning.
+
+        :param object: Object to attach
+        :param  point: Attach point
+
+        """
+
+        node = self.last_node
+        self.last_node = self.last_node + 1
+        self.nodes[node] = object
+        if point is None:
+            self.start.append(node)
+        else:
+            self.graph[point].append(node)
+        self.graph[node] = []
+        return node
+
+    def run_nodes (self, nodes, input):
+        """Run all nodes from these nodes onwards.
+
+        """
+
+        for next in nodes:
+            logging.debug ("Running node: " + str(next) + str(self.nodes[next]))
+            output = self.nodes[next].enrich (input)
+            self.run_nodes (self.graph[next], output)
+
+    def run (self, input):
+
+        self.run_nodes (self.start, input)
+
+class Enricher (object):
+    """Root of enricher classes.
+
+    Each enricher will perrom some transformation on the input, producing
+    some output.
+
+    """
+
+    def enrich (self, item):
+
+        raise Exception ("Should be overriden by child class")
+
+class Metadata(Enricher):
     """Class to add metadata to some item.
     """
 
@@ -94,7 +158,7 @@ class Metadata(object):
                     "metadata": metadata}
         return document
 
-class ElasticSearch_Sink (object):
+class Elastic_Sink (Enricher):
     """Sink for uploading data to ElasticSearch.
     """
 
@@ -115,14 +179,88 @@ class ElasticSearch_Sink (object):
         self.es.indices.create(self.index,
                                 {"mappings": {"commit": mapping_commit}})
 
-    def enrich (self, item, id):
+    def _id (self, item):
+
+        raise Exception ("Should be overriden by child class")
+
+    def enrich (self, item):
         """Upload item to ElasticSearch, using id.
 
         """
 
         res = self.es.index(index = self.index, doc_type = self.type,
-                            id=id, body=item)
+                            id = self._id(item), body = item)
         logging.debug("Result: " + str(res))
+
+class Elastic_Sink_Commit_Raw (Elastic_Sink):
+    """Elastic sink for raw commits.
+    """
+
+    def _id (self, item):
+        """Commit id (hash) is a good unique id.
+        """
+
+        return item["raw"]["commit"]
+
+class Elastic_Sink_Commit_Rich (Elastic_Sink):
+    """Elastic sink for rich commits.
+    """
+
+    def _id (self, item):
+        """Commit id (hash) is a good unique id.
+        """
+
+        return item["commit"]
+
+class Filter(Enricher):
+    """Class to filter some fields from an item.
+    """
+
+    def __init__ (self, filter):
+        """Init class.
+
+        """
+
+        self.filter = filter
+
+    def enrich (self, item):
+        """Enrich item with metadata.
+
+        :param item: Input item
+        :returns:    Output item
+
+        """
+
+        output = {}
+        for old, new in self.filter.items():
+            output[new] = item[old]
+        return output
+
+class Fix_Dates(Enricher):
+    """Class to convert RFC 2822 dates to aware datetime.
+    """
+
+    def __init__ (self, fields):
+        """Init class.
+
+        """
+
+        self.fields = fields
+        self.next = []
+
+    def enrich (self, item):
+        """Convert specified fields to datetime.
+
+        :param item: Input item
+        :returns:    Output item
+
+        """
+
+        output = item
+        for field in self.fields:
+            output[field] = email.utils.parsedate_to_datetime(item[field])
+        return output
+
 
 def git_analysis (repo, dir, es, es_index):
     """Analyze the git repository.
@@ -143,13 +281,30 @@ def git_analysis (repo, dir, es, es_index):
                         "backend_version": "0.1.0",
                         "origin": git_repo})
     logging.info("Parsing git log output...")
-    es_sink = ElasticSearch_Sink(es = es, index = "git-raw", type = "commit")
-
+    # Define enrichers
+    raw_sink = Elastic_Sink_Commit_Raw(es = es, index = "git-raw",
+                                            type = "commit")
+    commit_filter = Filter (filter = {"commit": "commit",
+                                        "Author": "author",
+                                        "Commit": "committer",
+                                        "AuthorDate": "author_date",
+                                        "CommitDate": "committer_date",
+                                        "message": "message"})
+    fix_dates = Fix_Dates (["author_date", "committer_date"])
+    rich_sink = Elastic_Sink_Commit_Rich(es = es, index = "git-rich",
+                                                type = "commit")
+    chains = Chains()
+    # Compose chain for raw commits
+    point = chains.attach (object = metadata)
+    chains.attach (object = raw_sink, point = point)
+    # Compose chain for rich commits
+    point = chains.attach (object = commit_filter)
+    point = chains.attach (object = fix_dates, point = point)
+    chains.attach (object = rich_sink, point = point)
+    # Run chains for each commit parsed
     for item in git_parser.fetch():
         logging.debug(item)
-        item = metadata.enrich (item)
-        es_sink.enrich (item, item["raw"]["commit"])
-
+        chains.run(item)
 
 if __name__ == "__main__":
     args = parse_args()
