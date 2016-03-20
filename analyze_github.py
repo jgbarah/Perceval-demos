@@ -49,6 +49,8 @@ def parse_args ():
                         help = "Git repo to analyze ('owner/project')")
     parser.add_argument("-e", "--es_url",
                         help = "ElasticSearch url (http://user:secret@host:port/res)")
+    parser.add_argument("-i", "--es_index",
+                        help = "ElasticSearch index prefix")
     parser.add_argument("-l", "--logging", type=str, choices=["info", "debug"],
                         help = "Logging level for output")
     parser.add_argument("--logfile", type=str,
@@ -188,8 +190,18 @@ class Elastic_Sink (Enricher):
 
         """
 
-        res = self.es.index(index = self.index, doc_type = self.type,
-                            id = self._id(item), body = item)
+        # Check surrogate escaping, and remove it if needed
+        try:
+            res = self.es.index(index = self.index, doc_type = self.type,
+                                id = self._id(item), body = item)
+        except UnicodeEncodeError as e:
+            if e.reason == 'surrogates not allowed':
+                logging.debug ("Surrogate found in: " + body)
+                body = body.encode('utf-8', "backslashreplace").decode('utf-8')
+                res = self.es.index(index = self.index, doc_type = self.type,
+                                    id = self._id(item), body = item)
+            else:
+                raise
         logging.debug("Result: " + str(res))
 
 class Elastic_Sink_Commit_Raw (Elastic_Sink):
@@ -216,15 +228,27 @@ class Filter(Enricher):
     """Class to filter some fields from an item.
     """
 
-    def __init__ (self, filter):
+    def __init__ (self, filter, default = {}):
         """Init class.
+
+        Both filter and default are dictionaries, keyed by input fields to
+        filter. In the case of filter, values are names to use as output
+        fields. In case of default, values are default values to use when
+        the corresponding field does not exist.
+
+        :param filter: Values to filter
+        :param default: Default values
 
         """
 
         self.filter = filter
+        self.default = default
 
     def enrich (self, item):
         """Enrich item with metadata.
+
+        If any field to filter is not in item, the default value will be
+        used, if defined (None otherwise).
 
         :param item: Input item
         :returns:    Output item
@@ -233,7 +257,13 @@ class Filter(Enricher):
 
         output = {}
         for old, new in self.filter.items():
-            output[new] = item[old]
+            try:
+                output[new] = item[old]
+            except KeyError:
+                if old in self.default:
+                    output[new] = self.default[old]
+                else:
+                    output[new] = None
         return output
 
 class Fix_Dates(Enricher):
@@ -268,21 +298,21 @@ def git_analysis (repo, dir, es, es_index):
     :param     repo: Name of the GitHub repository ('owner/repository')
     :param      dir: Directory for cloning the git repository
     :param       es: ElasticSearch object, ready to push data to it
-    :param es_index: ElasticSearch index to use
+    :param es_index: Prefix for ElasticSearch index to use
 
     """
 
     git_repo = "https://github.com/" + repo + ".git"
     logging.debug("Using temporary directory: " + dir)
     git_parser = perceval.backends.git.Git(uri=git_repo,
-                                        gitpath=os.path.join(dir, repo))
+                                            gitpath=os.path.join(dir, repo))
     metadata = Metadata ({"retriever": "Perceval",
                         "backend_name": "git",
                         "backend_version": "0.1.0",
                         "origin": git_repo})
     logging.info("Parsing git log output...")
     # Define enrichers
-    raw_sink = Elastic_Sink_Commit_Raw(es = es, index = "git-raw",
+    raw_sink = Elastic_Sink_Commit_Raw(es = es, index = es_index + "-git-raw",
                                             type = "commit")
     commit_filter = Filter (filter = {"commit": "commit",
                                         "Author": "author",
@@ -291,7 +321,7 @@ def git_analysis (repo, dir, es, es_index):
                                         "CommitDate": "committer_date",
                                         "message": "message"})
     fix_dates = Fix_Dates (["author_date", "committer_date"])
-    rich_sink = Elastic_Sink_Commit_Rich(es = es, index = "git-rich",
+    rich_sink = Elastic_Sink_Commit_Rich(es = es, index = es_index + "-git-rich",
                                                 type = "commit")
     chains = Chains()
     # Compose chain for raw commits
@@ -324,4 +354,4 @@ if __name__ == "__main__":
     es = elasticsearch.Elasticsearch([args.es_url])
     with tempfile.TemporaryDirectory() as tmpdir:
         items = git_analysis(repo = repo, dir = tmpdir,
-                            es = es, es_index = "git-raw")
+                            es = es, es_index = args.es_index)
