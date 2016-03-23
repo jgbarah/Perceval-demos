@@ -36,6 +36,7 @@ git clone git://git.baserock.org/baserock/baserock/definitions.git baserock-defi
 import argparse
 import logging
 import yaml
+import subprocess
 
 def parse_args ():
     """
@@ -79,6 +80,17 @@ if __name__ == "__main__":
             pkg_data = chunk
     logging.debug('Info about pkg: ' + str(pkg_data))
     repo_name = pkg_data['repo']
-    repo_url = 'https://git.baserock.org/git/delta/' \
-        + repo_name.replace(':git', '.git')
-    logging.info('Repo: ' + repo_name + ', ' + repo_url)
+    if repo_name == 'upstream:git':
+        repo_url = 'http://git.baserock.org/cgit/delta/' \
+            + repo_name.replace('upstream:', '', 1) + '.git'
+        repo_ref = pkg_data['ref']
+        logging.info('Repo: ' + repo_name + ', ' + repo_url + ', ' + repo_ref)
+        repo_dir = 'baserock:' + repo_name
+        git_clone_cmd = ['git', 'clone', repo_url, repo_dir]
+        logging.debug('Running ' + ' '.join(git_clone_cmd))
+        subprocess.call(git_clone_cmd)
+        git_ckeckout_cmd = ['git', '-C', repo_dir, 'checkout', repo_ref]
+        logging.debug('Running ' + ' '.join(git_ckeckout_cmd))
+        subprocess.call(git_ckeckout_cmd)
+    else:
+        logging.info('Repo: ' + repo_name)
