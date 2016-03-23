@@ -24,6 +24,10 @@
 description = """
 Compare directories
 
+Example:
+
+diff_test.py --repo git.repo -p git-2.7.0 --after 2016-02-01 --step 10 -l info
+
 """
 
 import argparse
@@ -34,6 +38,7 @@ import perceval.backends
 import subprocess
 import logging
 import io
+import datetime
 
 def parse_args ():
     """
@@ -326,26 +331,13 @@ if __name__ == "__main__":
         else:
             logging.basicConfig(format=log_format, level=level)
 
-    git_cmd = ["git", "-C", args.repo, "log", "--raw", "--numstat",
-                "--pretty=fuller", "--decorate=full", "--parents",
-                "-M", "-C", "-c", "--first-parent", "master"]
-    if args.after:
-        git_cmd.extend(["--after", args.after])
-    if args.before:
-        git_cmd.extend(["--before", args.before])
-
-    logging.info("git command: %s.", " ".join(git_cmd))
     metrics = Metrics()
-    with subprocess.Popen(git_cmd, stdout = subprocess.PIPE) as git_proc:
-        # TextIOWrapper is needed to specify an error handler that ignores
-        #  non-utf8 characters
-        git_proc_stdout = io.TextIOWrapper(git_proc.stdout,errors="ignore")
-        git_parser = perceval.backends.git.GitParser(git_proc_stdout)
-        logging.info("Parsing git log output...")
-        logging.debug("git command: %s.", " ".join(git_cmd))
-        for item in git_parser.parse():
-            metrics.add_commit(item["commit"], item["CommitDate"])
+    git_parser = perceval.backends.git.Git(uri='tbd', gitpath=args.repo)
+    from_date = datetime.datetime.strptime(args.after, '%Y-%m-%d')
+    for item in git_parser.fetch(from_date = from_date):
+        metrics.add_commit(item["commit"], item["CommitDate"])
     logging.info("%d commits parsed." % metrics.num_commits())
+
     left = 0
     right = metrics.num_commits()-1
     step = args.step
