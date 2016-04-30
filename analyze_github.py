@@ -62,7 +62,9 @@ mapping_commit = {
     "properties" : {
         "metadata": {
             "properties": {
-                "updated_on": {"type":"date"}
+                "updated_on": {"type":"date"},
+                "author":{"type":"string",
+                          "index":"not_analyzed"}
                 }
         }
     }
