@@ -335,7 +335,7 @@ if __name__ == "__main__":
     git_parser = perceval.backends.git.Git(uri='tbd', gitpath=args.repo)
     from_date = datetime.datetime.strptime(args.after, '%Y-%m-%d')
     for item in git_parser.fetch(from_date = from_date):
-        metrics.add_commit(item["commit"], item["CommitDate"])
+        metrics.add_commit(item['data']['commit'], item['data']['CommitDate'])
     logging.info("%d commits parsed." % metrics.num_commits())
 
     left = 0
