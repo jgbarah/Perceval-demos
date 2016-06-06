@@ -50,6 +50,8 @@ def parse_args ():
                         help = "Git repo to compare")
     parser.add_argument("-p", "--pkg",
                         help = "Source package to compare")
+    parser.add_argument("-d", "--dpkg",
+                        help = "Debian source package to compare (dsc file)")
     parser.add_argument("--after", type=str,
                         help = "Consider only commits after date (eg: 2016-01-31)")
     parser.add_argument("--before", type=str,
@@ -62,6 +64,24 @@ def parse_args ():
                         help = "Step (compare every step commits, instead of all)")
     args = parser.parse_args()
     return args
+
+def extract_dpkg(dpkg):
+    """Extract Debian package.
+
+    Extracts a Debian package, give its dsc file. The other components (the
+    original file and the diff file should be in the same directory). This
+    function assumes that dpkg-source is already installed and ready to run.
+
+    :params   dpkg: dsc file for a Debian package
+    :retursn: name of directory where the package was extracted.
+
+    """
+
+    dir = os.path.splitext(dpkg)[0]
+    logging.info("Extracting Debian pkg in dir: " + dir)
+    subprocess.call(["dpkg-source", "--extract", dpkg, dir],
+                    stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
+    return dir
 
 def count_unique(dir, files):
     """Count unique files.
@@ -175,12 +195,15 @@ class Metrics:
 
     """
 
-    def __init__(self):
+    def __init__(self, repo, dir):
 
         # List of commit hashes, ordered as returned by git
         self.commits = []
         # Dictionary with metrics, key is the commit number (order in commits)
         self.metrics = {}
+        # Repository and directory to compare
+        self.repo = repo
+        self.dir = dir
 
     def add_commit(self, commit, date):
         """Add commit info to data structure.
@@ -221,9 +244,9 @@ class Metrics:
         """
 
         commit = self.commits[commit_no]
-        subprocess.call(["git", "-C", args.repo, "checkout", commit[0]],
+        subprocess.call(["git", "-C", self.repo, "checkout", commit[0]],
                         stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
-        dcmp = filecmp.dircmp(args.repo, args.pkg)
+        dcmp = filecmp.dircmp(self.repo, self.dir)
         m = compare_dirs(dcmp)
         logging.debug ("Commit %s. Files: %d, %d, %d, lines: %d, %d, %d, %d)"
             % (commit[0], m["left_files"], m["right_files"], m["diff_files"],
@@ -331,8 +354,12 @@ if __name__ == "__main__":
         else:
             logging.basicConfig(format=log_format, level=level)
 
-    metrics = Metrics()
-    git_parser = perceval.backends.git.Git(uri='tbd', gitpath=args.repo)
+    if args.dpkg:
+        dir = extract_dpkg(args.dpkg)
+    else:
+        dir = args.pkg
+    metrics = Metrics(repo=args.repo, dir=dir)
+    git_parser = perceval.backends.git.Git(uri=args.repo, gitpath=args.repo)
     from_date = datetime.datetime.strptime(args.after, '%Y-%m-%d')
     for item in git_parser.fetch(from_date = from_date):
         metrics.add_commit(item['data']['commit'], item['data']['CommitDate'])
