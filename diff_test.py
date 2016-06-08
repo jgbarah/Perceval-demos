@@ -52,6 +52,8 @@ def parse_args ():
                         help = "Source package to compare")
     parser.add_argument("-d", "--dpkg",
                         help = "Debian source package to compare (dsc file)")
+    parser.add_argument("--debian_name", nargs=2,
+                        help = "Debian source package, name and release. Ex: git testing")
     parser.add_argument("--after", type=str,
                         help = "Consider only commits after date (eg: 2016-01-31)")
     parser.add_argument("--before", type=str,
@@ -340,6 +342,60 @@ class Metrics:
         return [self.metrics[seq_no] for seq_no in sorted(self.metrics)]
         #return self.metrics.values()
 
+def find_upstream_commit (upstream, dir, after):
+    """Find the most likely upstream commit.
+
+    Compares a source code directory with the checkouts from its upstream
+    git repo, with the intention of finding the most likely upstream commit
+    for the specific source code in the directory. The directory usually
+    corresponds to a snapshot of the git repository, like a downloadable
+    tarball, or a Debian/Ubuntu package. Although it is derived from the
+    upstream repository, usually it is not exactly equal to any checkout
+    (commit) from it. Therefore, we use several metrics to estimate how
+    close any checkout from the upstream repo is to the directory.
+
+    :params upstream: upstream git repository
+    :params dir: source code directory to match to upstream
+    :params after: check only commits after this date, format: %Y-%m-%d
+    :returns:
+
+    """
+
+    metrics = Metrics(repo=upstream, dir=dir)
+    git_parser = perceval.backends.git.Git(uri=upstream, gitpath=upstream)
+    from_date = datetime.datetime.strptime(args.after, '%Y-%m-%d')
+    for item in git_parser.fetch(from_date = from_date):
+        metrics.add_commit(item['data']['commit'], item['data']['CommitDate'])
+    logging.info("%d commits parsed." % metrics.num_commits())
+
+    left = 0
+    right = metrics.num_commits()-1
+    step = args.step
+    while step >= 1:
+        metrics.compute_range (left, right, step)
+        (left, right, min_seq, min_value) = metrics.min_range(3, "total_lines")
+        logging.info("Step: %d, left: %d, right: %d, min. seq: %d, min. value: %d."
+                    % (step, left, right, min_seq, min_value))
+        step = step // 2
+    min_commit = metrics.get_commit(min_seq)
+    most_similar = {
+        'sequence': min_seq,
+        'diff': min_value,
+        'hash': min_commit[0],
+        'date': min_commit[1]
+    }
+    logging.debug ('== Stats for all analyzed commits:')
+    logging.debug ("commit_seq", "commit", "date", "total_files", "total_lines",
+        "left_files", "right_files", "diff_files",
+        sep=",", flush=True)
+    for m in metrics.metrics_items():
+        logging.debug(m["commit_seq"], m["commit"], m["date"],
+            m["total_files"], m["total_lines"],
+            m["left_files"], m["right_files"], m["diff_files"],
+            m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"],
+            sep=",", flush=True)
+    return (most_similar)
+
 if __name__ == "__main__":
     args = parse_args()
     if args.logging:
@@ -356,34 +412,14 @@ if __name__ == "__main__":
 
     if args.dpkg:
         dir = extract_dpkg(args.dpkg)
+    elif args.debian_pkg:
+        dsc_file = get_debian_pkg (name=args.debian_pkg[0],
+                                    release=args.debian_pkg[1])
+        dir = extract_dpkg(dsc_file)
     else:
         dir = args.pkg
-    metrics = Metrics(repo=args.repo, dir=dir)
-    git_parser = perceval.backends.git.Git(uri=args.repo, gitpath=args.repo)
-    from_date = datetime.datetime.strptime(args.after, '%Y-%m-%d')
-    for item in git_parser.fetch(from_date = from_date):
-        metrics.add_commit(item['data']['commit'], item['data']['CommitDate'])
-    logging.info("%d commits parsed." % metrics.num_commits())
 
-    left = 0
-    right = metrics.num_commits()-1
-    step = args.step
-    while step >= 1:
-        metrics.compute_range (left, right, step)
-        (left, right, min_seq, min_value) = metrics.min_range(3, "total_lines")
-        logging.info("Step: %d, left: %d, right: %d, min. seq: %d, min. value: %d."
-                    % (step, left, right, min_seq, min_value))
-        step = step // 2
-    min_commit = metrics.get_commit(min_seq)
+    up_commit = find_upstream_commit (upstream=args.repo, dir=dir, after=args.after)
     print ("Most similar checkout: %d (diff: %d), date: %s, hash: %s." %
-            (min_seq, min_value, min_commit[1], min_commit[0]))
-    print ("commit_seq", "commit", "date", "total_files", "total_lines",
-        "left_files", "right_files", "diff_files",
-        "left_lines", "right_lines", "added_lines", "removed_lines",
-        sep=",", flush=True)
-    for m in metrics.metrics_items():
-        print(m["commit_seq"], m["commit"], m["date"],
-            m["total_files"], m["total_lines"],
-            m["left_files"], m["right_files"], m["diff_files"],
-            m["left_lines"], m["right_lines"], m["added_lines"], m["removed_lines"],
-            sep=",", flush=True)
+            (up_commit['sequence'], up_commit['diff'],
+            up_commit['date'], up_commit['hash']))
