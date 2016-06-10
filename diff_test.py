@@ -34,6 +34,10 @@ import argparse
 import filecmp
 import difflib
 import os
+import os.path
+import tempfile
+import gzip
+import urllib.request
 import perceval.backends
 import subprocess
 import logging
@@ -53,7 +57,7 @@ def parse_args ():
     parser.add_argument("-d", "--dpkg",
                         help = "Debian source package to compare (dsc file)")
     parser.add_argument("--debian_name", nargs=2,
-                        help = "Debian source package, name and release. Ex: git testing")
+                        help = "Debian source package, name and release. Ex: git stretch/main")
     parser.add_argument("--after", type=str,
                         help = "Consider only commits after date (eg: 2016-01-31)")
     parser.add_argument("--before", type=str,
@@ -67,6 +71,77 @@ def parse_args ():
     args = parser.parse_args()
     return args
 
+def get_dpkg_data (file_name, pkg_name):
+    """Get the urls of the components of a source package in aSources.gz file.
+
+    Parse the Sources.gz file given as parameter, finding the urls for
+    the componnents (.dsc, .tar.gz) for the given package name. Returns
+    a directory with an element 'directory' (directory in the remote
+    repository, as it appears in Sources.gz), an element 'dsc' (with the
+    name of the .dsc file, as it appears in the Sources.gz file), and an
+    element 'components' (list with the names of file components, including
+    .dsc, as they appear in Sources.gz)
+
+    :params filename: path of the Sources.gz file to parse
+    :params pkg_name: name of the package to find in the Sources.gz file
+    :returns: remote directory and list of urls of the components
+
+    """
+
+    data = {'components': []}
+    with gzip.open(file_name, 'rt') as sources:
+        name_found = False
+        files_found = False
+        to_download = []
+        for line in sources:
+            if files_found:
+                if line.startswith(' '):
+                    component = line.split()[2]
+                    data['components'].append(component)
+                    if component.endswith('.dsc'):
+                        data['dsc'] = component
+                else:
+                    files_found = False
+            if line.startswith('Package:'):
+                if name_found:
+                    name_found = False
+                    break
+                read_name = line.split()[1]
+                if read_name == pkg_name:
+                    name_found = True
+            elif name_found and line.startswith('Files:'):
+                files_found = True
+            elif name_found and line.startswith('Directory:'):
+                data['directory'] = line.split()[1]
+    return(data)
+
+def get_dpkg(name, release, dir):
+    """Get a debian source package, given its name and the release.
+
+    Gets the components of the source code package from the corresponding Debian
+    repository, and stores them in dir. To do that, it first gets the
+    Sources.gz file  for the corresponding distribution (eg: testing/main),
+    looks in it for the components of the package, and downloads them.
+
+    :params    name: name of the Debian package
+    :params release: Debian release
+    :params     dir: name (path) of the directory to download the components
+    :returns: path of the downloaded dsc file for the package
+
+    """
+
+    debian_repo = 'http://ftp.es.debian.org/debian/'
+    sources_url = debian_repo + 'dists/' + release + '/source/Sources.gz'
+    sources_file = os.path.join(dir, 'Sources.gz')
+    urllib.request.urlretrieve(sources_url, sources_file)
+    pkg_data = get_dpkg_data(sources_file, name)
+    for file in pkg_data['components']:
+        file_url = debian_repo + pkg_data['directory'] + "/" + file
+        file_path = os.path.join(dir, file)
+        logging.info ("Downloading {} from {}".format(file, file_url))
+        urllib.request.urlretrieve(file_url, file_path)
+    return os.path.join(dir, pkg_data['dsc'])
+
 def extract_dpkg(dpkg):
     """Extract Debian package.
 
@@ -75,14 +150,17 @@ def extract_dpkg(dpkg):
     function assumes that dpkg-source is already installed and ready to run.
 
     :params   dpkg: dsc file for a Debian package
-    :retursn: name of directory where the package was extracted.
+    :returns: name of directory where the package was extracted.
 
     """
 
     dir = os.path.splitext(dpkg)[0]
     logging.info("Extracting Debian pkg in dir: " + dir)
-    subprocess.call(["dpkg-source", "--extract", dpkg, dir],
+    result = subprocess.call(["dpkg-source", "--extract", dpkg, dir],
                     stdout = subprocess.DEVNULL, stderr = subprocess.DEVNULL)
+    if result != 0:
+        logging.info('Error while extracting package for {}'.format(dpkg))
+        exit()
     return dir
 
 def count_unique(dir, files):
@@ -412,9 +490,11 @@ if __name__ == "__main__":
 
     if args.dpkg:
         dir = extract_dpkg(args.dpkg)
-    elif args.debian_pkg:
-        dsc_file = get_debian_pkg (name=args.debian_pkg[0],
-                                    release=args.debian_pkg[1])
+    elif args.debian_name:
+        pkg_name = args.debian_name[0]
+        pkg_release = args.debian_name[1]
+        store = tempfile.TemporaryDirectory()
+        dsc_file = get_dpkg(name=pkg_name, release=pkg_release, dir=store.name)
         dir = extract_dpkg(dsc_file)
     else:
         dir = args.pkg
